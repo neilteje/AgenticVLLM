@@ -1,9 +1,7 @@
 # Efficient Execution of Agentic Traces Using vLLM
 
 **Research Project - Spring 2026**  
-**Student**: Neil Teje  
-**Supervisor**: Prof. Ragini Gupta  
-**Institution**: University of Illinois at Urbana-Champaign
+**Student**: Neil Teje 
 
 ---
 
