@@ -57,6 +57,4 @@ QLM/.git_REMOVED/
 
 # Ignore markdown files at the MONET root except README.md
 /*.md
-/*.txt
 !/README.md
-
