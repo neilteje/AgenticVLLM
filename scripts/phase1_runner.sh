@@ -5,8 +5,10 @@
 set -e  # Exit on error
 
 # Configuration
-QLMDIR="/Users/neilteje/Desktop/uiuc 2025-2026/Research/MONET/QLM"
-RESULTSDIR="/Users/neilteje/Desktop/uiuc 2025-2026/Research/MONET/results/phase1"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+QLMDIR="${REPO_ROOT}/QLM"
+RESULTSDIR="${REPO_ROOT}/results/phase1"
 VLLM_PORT=8000
 MODEL="unsloth/Llama-3.2-1B-Instruct"
 DURATION=60  # seconds per experiment

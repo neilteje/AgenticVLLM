@@ -3,7 +3,9 @@
 
 set +e  # Don't exit on error (we want to check everything)
 
-QLMDIR="/Users/neilteje/Desktop/uiuc 2025-2026/Research/MONET/QLM"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+QLMDIR="${REPO_ROOT}/QLM"
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -29,7 +31,7 @@ fi
 
 # Check 2: QLM Python package installed
 echo -n "Checking QLM installation... "
-cd "$QLMDIR"
+cd "$QLMDIR" 2>/dev/null
 if python -c "import qlm" 2>/dev/null; then
     echo -e "${GREEN}✓${NC}"
 else
@@ -94,7 +96,7 @@ fi
 
 # Check 7: Results directory
 echo -n "Checking results directory... "
-RESULTSDIR="/Users/neilteje/Desktop/uiuc 2025-2026/Research/MONET/results/phase1"
+RESULTSDIR="${REPO_ROOT}/results/phase1"
 if [ -d "$RESULTSDIR" ]; then
     echo -e "${GREEN}✓${NC}"
 else
@@ -111,7 +113,7 @@ fi
 
 # Check 8: Analysis directory
 echo -n "Checking analysis directory... "
-ANALYSISDIR="/Users/neilteje/Desktop/uiuc 2025-2026/Research/MONET/analysis"
+ANALYSISDIR="${REPO_ROOT}/analysis"
 if [ -d "$ANALYSISDIR" ]; then
     echo -e "${GREEN}✓${NC}"
 else
