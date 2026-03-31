@@ -1,0 +1,61 @@
+# Virtual environments
+venv/
+.venv/
+.venv*/
+ENV/
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Env files
+.env
+.env.*
+
+# OS/editor
+.DS_Store
+
+# Prevent committing nested git metadata (we vendor MAST/QLM as subfolders)
+**/.git/
+
+# Experiment outputs
+results/
+
+# Common large ML/data artifacts (weights, arrays, dumps, etc.)
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.npy
+*.npz
+*.pkl
+*.h5
+*.hdf5
+
+# Large directories from vendored repos
+MAST/traces/
+QLM/data/
+
+# If nested git dirs couldn't be deleted, we rename them to avoid nested repos
+MAST/.git_REMOVED/
+QLM/.git_REMOVED/
+
+# Ignore markdown files at the MONET root except README.md
+/*.md
+!/README.md
+
