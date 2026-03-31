@@ -66,20 +66,16 @@ class Queue:
         while True:
             self.vq_engine.reorder_vqs()
             for worker in self.workers:
-                try:
-                    backpressure = worker.get_backpressure()
-                    has_request = self.vq_engine.has_request(worker)
+                backpressure = worker.get_backpressure()
+                has_request = self.vq_engine.has_request(worker)
 
-                    if has_request and backpressure < self.config.max_batch_size:
-                        request_to_serve = self.vq_engine.pop_request(worker)
-                        dispatch_time = time.time()
-                        if self._on_dispatch_callback:
-                            self._on_dispatch_callback(request_to_serve, dispatch_time)
-                        await asyncio.to_thread(
-                            worker.add_request,
-                            request_to_serve.prompt,
-                            request_to_serve.model,
-                        )
-
-                except asyncio.CancelledError as e:
-                    print("handling cancelled error", e)
+                if has_request and backpressure < self.config.max_batch_size:
+                    request_to_serve = self.vq_engine.pop_request(worker)
+                    dispatch_time = time.time()
+                    if self._on_dispatch_callback:
+                        self._on_dispatch_callback(request_to_serve, dispatch_time)
+                    await asyncio.to_thread(
+                        worker.add_request,
+                        request_to_serve.prompt,
+                        request_to_serve.model,
+                    )
