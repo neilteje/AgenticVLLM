@@ -23,6 +23,13 @@ This project investigates how to efficiently schedule agentic execution traces (
 
 3. How do different serving engines (vLLM, QLM, Continuum) compare on agentic workloads?
 
+### vLLM + Continuum (`vllm-continuum/`)
+
+This repo vendors **[vllm-continuum](vllm-continuum/)**, a modified vLLM build that adds **Continuum-style scheduling** via `--scheduling-policy continuum` (KV-cache–aware scheduling; see the [Continuum paper](https://arxiv.org/abs/2511.02230)). It is included as a normal subdirectory of MONET (not a submodule) for Phase 3 benchmarks and three-way comparisons with stock vLLM and QLM.
+
+- **Docs**: [vllm-continuum/README.md](vllm-continuum/README.md) — prerequisites (`uv`, GPU), editable install, server commands, and optional SWE-bench evaluation under `continuum_exp/`.
+- **Upstream**: Derived from the vLLM project; license and notices are in [vllm-continuum/LICENSE](vllm-continuum/LICENSE).
+
 ---
 
 ## Repository Structure
@@ -46,6 +53,10 @@ MONET/
 ├── MAST/                         # MAST reference code & traces
 │   ├── traces/                   # Multi-agent execution traces
 │   └── README.md
+│
+├── vllm-continuum/               # vLLM fork with Continuum scheduling (--scheduling-policy continuum)
+│   ├── continuum_exp/            # SWE-bench / evaluation helpers
+│   └── README.md                 # Install, server flags, evaluation (see this folder)
 │
 ├── scripts/
 │   ├── validate_setup.sh         # Setup validator (run this first!)
@@ -92,6 +103,8 @@ vllm serve unsloth/Llama-3.2-1B-Instruct --port 8000
 ```
 
 Keep this running in a separate terminal.
+
+For **Continuum scheduling** (Phase 3 / stretch), build and run the server from [`vllm-continuum/`](vllm-continuum/README.md) with `--scheduling-policy continuum` instead of stock `vllm` from PyPI.
 
 ### 3. Run Phase 1 Experiments (12-15 hours)
 
@@ -358,8 +371,9 @@ This project builds on:
 Research code for academic use. See individual repositories for specific licenses:
 - QLM: Check `QLM/` repository
 - MAST: Check `MAST/` repository
+- vLLM / Continuum fork: See `vllm-continuum/LICENSE` and notices in that tree
 
 ---
 
-**Last Updated**: March 30, 2026  
-**Status**: Phase 1 setup complete, ready to start experiments
+**Last Updated**: April 1, 2026  
+**Status**: Phase 1 setup complete; `vllm-continuum` vendored for Continuum experiments
