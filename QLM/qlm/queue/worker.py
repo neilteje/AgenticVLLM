@@ -56,6 +56,9 @@ class Worker:
         for line in metrics.text.splitlines():
             if line.startswith(metric_name):
                 return float(line.split()[-1])
+        # Metric not found (vLLM metric names can vary by version).
+        # Returning 0 keeps the workload driver functional instead of deadlocking dispatch.
+        return 0.0
 
     def get_backpressure(self):
         """
@@ -73,8 +76,9 @@ class Worker:
 
             return backpressure
         except Exception as e:
-            # If the worker is not reachable, return infinite backpressure
-            return INF
+            # If metrics are temporarily unavailable/parsing fails, don't deadlock dispatch.
+            # Treat as no backpressure and let vLLM apply natural backpressure (latency).
+            return 0.0
 
     def __hash__(self):
         return hash(self.worker_id)
