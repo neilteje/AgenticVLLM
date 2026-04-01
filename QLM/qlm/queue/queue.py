@@ -65,8 +65,11 @@ class Queue:
 
         while True:
             self.vq_engine.reorder_vqs()
+            dispatched = False
             for worker in self.workers:
-                backpressure = worker.get_backpressure()
+                # get_backpressure() makes a blocking HTTP call; run in a thread so we
+                # don't stall the event loop and starve other coroutines.
+                backpressure = await asyncio.to_thread(worker.get_backpressure)
                 has_request = self.vq_engine.has_request(worker)
 
                 if has_request and backpressure < self.config.max_batch_size:
@@ -79,3 +82,10 @@ class Queue:
                         request_to_serve.prompt,
                         request_to_serve.model,
                     )
+                    dispatched = True
+
+            # If nothing was dispatched this iteration, yield to the event loop so
+            # _user_task coroutines can run and push prompts into the queue.
+            # Without this yield the loop spin-blocks and no prompts ever arrive.
+            if not dispatched:
+                await asyncio.sleep(0.01)
