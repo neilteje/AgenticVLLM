@@ -35,6 +35,10 @@ class VirtualQueueEngine:
         self.vqs.append(new_vq)
         self.vq_worker_bimap[new_vq] = worker
 
+    def _group_in_any_vq(self, group) -> bool:
+        """Returns True if the group is currently registered in any virtual queue."""
+        return any(group in vq.groups for vq in self.vqs)
+
     def add_request(self, request):
         """
         Adds a request to the virtual queue engine. If a group with the same model and slo exists, adds the request to
@@ -45,6 +49,13 @@ class VirtualQueueEngine:
             existing_group = self.model_slo_group_bimap[(request.model, request.slo)]
             existing_group.add_request(request)
             self.request_to_group[request] = existing_group
+            # The group is removed from its VQ when it becomes empty (see pop_request).
+            # If a new request arrives after that, we must re-insert it so the queue
+            # loop can see it again via has_request(). Without this, all requests after
+            # the first complete group cycle are silently dropped.
+            if not self._group_in_any_vq(existing_group):
+                vq_idx = random.choice(range(len(self.vqs)))
+                self.vqs[vq_idx].add_group(existing_group)
         else:
             new_group = Group(request.model, request.slo)
             print("Adding new group with model and slo", request.model, request.slo)
