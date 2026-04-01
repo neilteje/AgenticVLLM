@@ -16,7 +16,9 @@ class Worker:
         :param address: The address of the worker.
         :param port: The port of the worker.
         """
-        self.address = f"http://localhost:{port}"
+        # Use the configured address (important for remote hosts / Runpod).
+        # vLLM serves HTTP on this host:port.
+        self.address = f"http://{address}:{port}"
         self.endpoint= endpoint
         self.openai_api_base = f"{self.address}/v1"
         self.openai_api_key = "EMPTY"

@@ -10,6 +10,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 QLMDIR="${REPO_ROOT}/QLM"
 RESULTSDIR="${REPO_ROOT}/results/phase1"
 VLLM_PORT=8000
+VLLM_ADDRESS="${VLLM_ADDRESS:-localhost}"
 MODEL="unsloth/Llama-3.2-1B-Instruct"
 DURATION=60  # seconds per experiment
 MAX_SAMPLES=1000
@@ -49,6 +50,7 @@ run_vllm_experiment() {
             --burst-interval $burst_interval \
             --num-users $num_users \
             --model $MODEL \
+            --address "$VLLM_ADDRESS" \
             --port $VLLM_PORT \
             --no-start-vllm \
             ${prompt_length:+--prompt-length $prompt_length} \
@@ -61,6 +63,7 @@ run_vllm_experiment() {
             --arrival-rate $arrival_rate \
             --num-users $num_users \
             --model $MODEL \
+            --address "$VLLM_ADDRESS" \
             --port $VLLM_PORT \
             --no-start-vllm \
             ${prompt_length:+--prompt-length $prompt_length} \
@@ -95,6 +98,7 @@ run_qlm_experiment() {
             --burst-interval $burst_interval \
             --num-users $num_users \
             --model $MODEL \
+            --address "$VLLM_ADDRESS" \
             --port $VLLM_PORT \
             --no-start-vllm \
             ${prompt_length:+--prompt-length $prompt_length} \
@@ -107,6 +111,7 @@ run_qlm_experiment() {
             --arrival-rate $arrival_rate \
             --num-users $num_users \
             --model $MODEL \
+            --address "$VLLM_ADDRESS" \
             --port $VLLM_PORT \
             --no-start-vllm \
             ${prompt_length:+--prompt-length $prompt_length} \
