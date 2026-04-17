@@ -395,6 +395,8 @@ def replay_trace(trace: dict[str, Any], client: OpenAI, model_name: str,
     results: list[dict[str, Any]] = []
     total_tool_sleep_s = 0.0
     solve_t0 = time.time()
+    continuum_job_id = str(trace.get("instance_id") or "unknown_job")
+    prev_func_call: str | None = None
     input_token_budget = compute_input_token_budget(
         max_model_len,
         max_completion_tokens,
@@ -433,12 +435,21 @@ def replay_trace(trace: dict[str, Any], client: OpenAI, model_name: str,
                 len(msg["content"]) for msg in request_messages)
             t0 = time.time()
             try:
+                action = turn.get("action") or {}
+                this_func_call = action.get("tool_name") or "llm_only"
+                extra_body = {
+                    "job_id": continuum_job_id,
+                    "is_last_step": completed_turns == total_turns,
+                    "this_func_call": this_func_call,
+                    "last_func_call": prev_func_call,
+                }
                 response = client.chat.completions.create(
                     model=model_name,
                     messages=request_messages,
                     temperature=temperature,
                     max_completion_tokens=max_completion_tokens,
                     seed=seed,
+                    extra_body=extra_body,
                 )
                 t1 = time.time()
                 break
@@ -473,6 +484,9 @@ def replay_trace(trace: dict[str, Any], client: OpenAI, model_name: str,
             "role": "assistant",
             "content": response_text,
         }]
+
+        # Update Continuum function-call metadata for the next request in this job.
+        prev_func_call = (turn.get("action") or {}).get("tool_name") or prev_func_call
 
         tool_sleep_s = tool_delay_for_turn(turn, delay_policy, constant_delay)
         tool_sleep_start_time: float | None = None
