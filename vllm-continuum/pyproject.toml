@@ -46,7 +46,11 @@ vllm = "vllm.entrypoints.cli.main:main"
 lora_filesystem_resolver = "vllm.plugins.lora_resolvers.filesystem_resolver:register_filesystem_resolver"
 
 [tool.setuptools_scm]
-# no extra settings needed, presence enables setuptools-scm
+# Allow editable installs from a subdirectory of a git repo.
+# On clusters (e.g. Delta) MONET is a git repo at the root, and `vllm-continuum/`
+# is vendored as a plain folder. Without this, setuptools-scm fails to find a
+# version when installing from `vllm-continuum/`.
+search_parent_directories = true
 
 [tool.setuptools.packages.find]
 where = ["."]
