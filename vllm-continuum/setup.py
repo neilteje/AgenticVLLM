@@ -494,7 +494,14 @@ def get_gaudi_sw_version():
 
 
 def get_vllm_version() -> str:
-    version = get_version(write_to="vllm/_version.py")
+    # Allow building/installing from a vendored subdirectory inside a larger
+    # repository (e.g. MONET). In those cases, setuptools-scm can fail to infer
+    # the correct VCS root unless we anchor version detection to this file.
+    version = get_version(
+        write_to="vllm/_version.py",
+        relative_to=__file__,
+        root=str(ROOT_DIR),
+    )
     sep = "+" if "+" not in version else "."  # dev versions might contain +
 
     if _no_device():
