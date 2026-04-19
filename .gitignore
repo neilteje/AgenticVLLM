@@ -22,6 +22,9 @@ dist/
 # Jupyter
 .ipynb_checkpoints/
 
+# Local matplotlib config/cache (e.g. MPLCONFIGDIR for headless plot generation)
+.mplconfig/
+
 # Env files
 .env
 .env.*
