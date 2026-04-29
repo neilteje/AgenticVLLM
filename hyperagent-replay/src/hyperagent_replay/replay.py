@@ -29,6 +29,77 @@ DEFAULT_CONTEXT_SAFETY_MARGIN = 512
 DEFAULT_MIN_REFERENCE_CHARS = 256
 DEFAULT_CHARS_PER_TOKEN_ESTIMATE = 3.0
 
+ENGINE_MODE_STOCK = "stock"
+ENGINE_MODE_CONTINUUM = "continuum"
+ENGINE_MODE_CHOICES = (ENGINE_MODE_STOCK, ENGINE_MODE_CONTINUUM)
+
+
+def continuum_tool_signature(turn: dict[str, Any]) -> str:
+    """Tool-call signature used as Continuum's `this_func_call`.
+
+    Delegates to `resource_groups.turn_tool_signature` (e.g. normalizes
+    `open_file._run(...)` -> `open_file`). Imported lazily to avoid a
+    module-import cycle with `resource_groups`.
+    """
+    from hyperagent_replay.resource_groups import turn_tool_signature
+    return turn_tool_signature(turn)
+
+
+def build_continuum_extra_body(
+    *,
+    instance_id: str,
+    turn: dict[str, Any],
+    is_last_step: bool,
+) -> dict[str, Any]:
+    """Build the `extra_body` kwargs to tag a request for vllm-continuum.
+
+    `last_func_call` is intentionally not sent: vllm-continuum's
+    `ToolCallEstimator.request_arrives` asserts it is None on the first
+    turn of a job and otherwise overwrites it from its internal history.
+    """
+    body: dict[str, Any] = {
+        "job_id": instance_id,
+        "is_last_step": bool(is_last_step),
+    }
+    tool_signature = continuum_tool_signature(turn)
+    if tool_signature and tool_signature != "LLM_ONLY":
+        body["this_func_call"] = tool_signature
+    return body
+
+
+def extract_cached_prompt_tokens(usage: Any) -> int | None:
+    """Pull `usage.prompt_tokens_details.cached_tokens` defensively.
+
+    Works with the OpenAI SDK's Pydantic-ish objects and plain dicts.
+    """
+    if usage is None:
+        return None
+    details = getattr(usage, "prompt_tokens_details", None)
+    if details is None and isinstance(usage, dict):
+        details = usage.get("prompt_tokens_details")
+    if details is None:
+        return None
+    cached = getattr(details, "cached_tokens", None)
+    if cached is None and isinstance(details, dict):
+        cached = details.get("cached_tokens")
+    if cached is None:
+        return None
+    try:
+        return int(cached)
+    except (TypeError, ValueError):
+        return None
+
+
+def compute_new_prefill_tokens(
+    prompt_tokens: int | None,
+    cached_prompt_tokens: int | None,
+) -> int | None:
+    if prompt_tokens is None:
+        return None
+    if cached_prompt_tokens is None:
+        return prompt_tokens
+    return max(0, prompt_tokens - cached_prompt_tokens)
+
 
 def percentile(values: list[float], p: float) -> float:
     if not values:
@@ -384,9 +455,15 @@ def replay_trace(trace: dict[str, Any], client: OpenAI, model_name: str,
                  context_safety_margin: int,
                  min_reference_chars: int,
                  chars_per_token_estimate: float,
+                 engine_mode: str = ENGINE_MODE_STOCK,
+                 job_id_override: str | None = None,
                  progress_callback: Callable[[int, int, dict[str, Any]], None]
                  | None = None
                  ) -> dict[str, Any]:
+    if engine_mode not in ENGINE_MODE_CHOICES:
+        raise ValueError(
+            f"engine_mode must be one of {ENGINE_MODE_CHOICES}, got {engine_mode!r}")
+    continuum_job_id = job_id_override or trace["instance_id"]
     contexts: dict[str, list[dict[str, str]]] = {}
     turns = trace["llm_turns"]
     if max_turns is not None:
@@ -395,8 +472,6 @@ def replay_trace(trace: dict[str, Any], client: OpenAI, model_name: str,
     results: list[dict[str, Any]] = []
     total_tool_sleep_s = 0.0
     solve_t0 = time.time()
-    continuum_job_id = str(trace.get("instance_id") or "unknown_job")
-    prev_func_call: str | None = None
     input_token_budget = compute_input_token_budget(
         max_model_len,
         max_completion_tokens,
@@ -418,6 +493,15 @@ def replay_trace(trace: dict[str, Any], client: OpenAI, model_name: str,
         estimated_prompt_tokens: int | None = None
         request_arrival_time = time.time()
 
+        is_last_step = completed_turns == total_turns
+        continuum_extra_body: dict[str, Any] | None = None
+        if engine_mode == ENGINE_MODE_CONTINUUM:
+            continuum_extra_body = build_continuum_extra_body(
+                instance_id=continuum_job_id,
+                turn=turn,
+                is_last_step=is_last_step,
+            )
+
         while True:
             (request_messages, active_context, active_max_reference_chars,
              dropped_for_budgeting,
@@ -433,24 +517,18 @@ def replay_trace(trace: dict[str, Any], client: OpenAI, model_name: str,
             dropped_context_messages += dropped_for_budgeting
             request_prompt_chars = sum(
                 len(msg["content"]) for msg in request_messages)
+            create_kwargs: dict[str, Any] = {
+                "model": model_name,
+                "messages": request_messages,
+                "temperature": temperature,
+                "max_completion_tokens": max_completion_tokens,
+                "seed": seed,
+            }
+            if continuum_extra_body is not None:
+                create_kwargs["extra_body"] = continuum_extra_body
             t0 = time.time()
             try:
-                action = turn.get("action") or {}
-                this_func_call = action.get("tool_name") or "llm_only"
-                extra_body = {
-                    "job_id": continuum_job_id,
-                    "is_last_step": completed_turns == total_turns,
-                    "this_func_call": this_func_call,
-                    "last_func_call": prev_func_call,
-                }
-                response = client.chat.completions.create(
-                    model=model_name,
-                    messages=request_messages,
-                    temperature=temperature,
-                    max_completion_tokens=max_completion_tokens,
-                    seed=seed,
-                    extra_body=extra_body,
-                )
+                response = client.chat.completions.create(**create_kwargs)
                 t1 = time.time()
                 break
             except Exception as exc:
@@ -479,14 +557,14 @@ def replay_trace(trace: dict[str, Any], client: OpenAI, model_name: str,
         prompt_tokens = getattr(usage, "prompt_tokens", None)
         completion_tokens = getattr(usage, "completion_tokens", None)
         total_tokens = getattr(usage, "total_tokens", None)
+        cached_prompt_tokens = extract_cached_prompt_tokens(usage)
+        new_prefill_tokens = compute_new_prefill_tokens(
+            prompt_tokens, cached_prompt_tokens)
 
         contexts[key] = [*request_messages, {
             "role": "assistant",
             "content": response_text,
         }]
-
-        # Update Continuum function-call metadata for the next request in this job.
-        prev_func_call = (turn.get("action") or {}).get("tool_name") or prev_func_call
 
         tool_sleep_s = tool_delay_for_turn(turn, delay_policy, constant_delay)
         tool_sleep_start_time: float | None = None
@@ -518,12 +596,16 @@ def replay_trace(trace: dict[str, Any], client: OpenAI, model_name: str,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "cached_prompt_tokens": cached_prompt_tokens,
+            "new_prefill_tokens": new_prefill_tokens,
             "estimated_prompt_tokens": estimated_prompt_tokens,
             "effective_max_reference_chars": active_max_reference_chars,
             "dropped_context_messages": dropped_context_messages,
             "context_retry_count": context_retry_count,
             "request_messages": request_messages,
             "response_text": response_text,
+            "engine_mode": engine_mode,
+            "continuum_extra_body": continuum_extra_body,
         })
 
         if progress_callback is not None:
@@ -539,6 +621,22 @@ def replay_trace(trace: dict[str, Any], client: OpenAI, model_name: str,
         item["completion_tokens"] for item in results
         if item["completion_tokens"] is not None
     ]
+    cached_prompt_token_values = [
+        item["cached_prompt_tokens"] for item in results
+        if item["cached_prompt_tokens"] is not None
+    ]
+    new_prefill_token_values = [
+        item["new_prefill_tokens"] for item in results
+        if item["new_prefill_tokens"] is not None
+    ]
+    total_prompt_tokens_reported = sum(prompt_tokens)
+    total_cached_prompt_tokens = (
+        sum(cached_prompt_token_values) if cached_prompt_token_values else 0)
+    total_new_prefill_tokens = (
+        sum(new_prefill_token_values) if new_prefill_token_values else 0)
+    prefill_reuse_ratio = (
+        total_cached_prompt_tokens / total_prompt_tokens_reported
+        if total_prompt_tokens_reported > 0 else 0.0)
     scheduler_timestamps = build_scheduler_timestamps(
         trace["instance_id"],
         results,
@@ -562,6 +660,10 @@ def replay_trace(trace: dict[str, Any], client: OpenAI, model_name: str,
             "constant_delay": constant_delay,
             "seed": seed,
             "max_turns": max_turns,
+            "engine_mode": engine_mode,
+            "continuum_job_id": (
+                continuum_job_id
+                if engine_mode == ENGINE_MODE_CONTINUUM else None),
         },
         "timing": {
             "wall_solve_time_s": solve_t1 - solve_t0,
@@ -577,8 +679,14 @@ def replay_trace(trace: dict[str, Any], client: OpenAI, model_name: str,
             (percentile(request_latencies, 95) if request_latencies else 0.0),
             "p99_request_latency_s":
             (percentile(request_latencies, 99) if request_latencies else 0.0),
-            "total_prompt_tokens": sum(prompt_tokens),
+            "gpu_seconds_per_job": sum(request_latencies),
+            "total_prompt_tokens": total_prompt_tokens_reported,
             "total_completion_tokens": sum(completion_tokens),
+            "total_cached_prompt_tokens": total_cached_prompt_tokens,
+            "total_new_prefill_tokens": total_new_prefill_tokens,
+            "prefill_reuse_ratio": prefill_reuse_ratio,
+            "num_turns_with_cached_prompt_tokens":
+            len(cached_prompt_token_values),
             "num_turns_context_trimmed": sum(
                 1 for item in results
                 if item["dropped_context_messages"] > 0
@@ -661,6 +769,25 @@ def main() -> None:
         default=[],
         help="Additional argument to pass through to `vllm serve`",
     )
+    parser.add_argument(
+        "--engine-mode",
+        choices=list(ENGINE_MODE_CHOICES),
+        default=ENGINE_MODE_STOCK,
+        help=(
+            "Serving backend to target. `stock` sends standard chat "
+            "completions. `continuum` adds vllm-continuum scheduling "
+            "metadata (job_id, this_func_call, is_last_step) per request."
+        ),
+    )
+    parser.add_argument(
+        "--job-id-override",
+        type=str,
+        default=None,
+        help=(
+            "Override the Continuum job_id (defaults to the trace "
+            "instance_id). Only meaningful with --engine-mode continuum."
+        ),
+    )
     args = parser.parse_args()
 
     if args.max_model_len is not None and args.max_model_len <= 0:
@@ -718,6 +845,8 @@ def main() -> None:
             seed=args.seed,
             delay_policy=args.delay_policy,
             constant_delay=args.constant_delay,
+            engine_mode=args.engine_mode,
+            job_id_override=args.job_id_override,
         )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(results, indent=2))

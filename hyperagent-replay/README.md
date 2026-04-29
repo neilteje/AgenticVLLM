@@ -191,6 +191,45 @@ ha-trace-batch-replay /tmp/hyperagent-extracted \
 
 Batch replay prints progress lines for each file and each completed turn. If you use `--launch-server`, add `--server-log /path/to/vllm.log` to keep the vLLM server logs out of the main terminal stream.
 
+## Reuse-aware replay
+
+If you want to run a single trajectory on vLLM while reusing exact repeated stages, use:
+
+```bash
+ha-trace-replay-reuse /tmp/trace.extracted.json \
+  --model Qwen/Qwen2.5-Coder-14B-Instruct \
+  --base-url http://127.0.0.1:8000/v1 \
+  --slo-class interactive \
+  --output /tmp/trace.reuse.replay.json
+```
+
+This command stays on top of `vllm serve`: it does not modify vLLM internals. It replays the trajectory turn-by-turn, and when it sees an exact repeated stage it reuses the prior assistant response instead of sending a new request to vLLM.
+
+Reuse-aware replay prints a progress line after every completed turn, for example `Completed 37/116 turns`. These counts include cache-hit turns, so they reflect trajectory progress rather than only vLLM requests.
+
+If you pass SLO targets, reuse-aware replay can also tighten request budgets on turns that are predicted to be at risk of missing the target. The cache key and reuse semantics stay exact-repeat only; SLOs change budgeting, not cache identity.
+
+```bash
+ha-trace-replay-reuse /tmp/trace.extracted.json \
+  --model Qwen/Qwen2.5-Coder-14B-Instruct \
+  --base-url http://127.0.0.1:8000/v1 \
+  --slo-class interactive \
+  --request-target-s 10 \
+  --episode-target-s 1800 \
+  --slo-policy budget \
+  --output /tmp/trace.reuse.replay.json
+```
+
+The reuse-aware replay output adds:
+
+- per-turn `cache_hit` and `executed_on_vllm`
+- per-turn `cache_key` and `cache_source_turn_index`
+- per-turn resource-group annotations
+- per-turn SLO slack, selected budget mode, and effective request budgets
+- timing counters for executed versus avoided vLLM requests
+
+`scheduler_timestamps` only includes real vLLM requests. Cache hits are not added to the scheduler trace.
+
 ## Evaluate metrics
 
 Single replay:
@@ -217,6 +256,95 @@ ha-trace-batch-eval /tmp/hyperagent-replays \
 ```
 
 Batch evaluation writes one `*.eval.json` per input plus an `eval_manifest.json` that includes aggregate source and replay metrics across all successful inputs.
+
+## SLO Attainment
+
+You can evaluate whether replayed requests meet per-agent request SLOs and whether the full trajectory meets an episode SLO:
+
+```bash
+ha-trace-slo-report /tmp/trace.reuse.replay.json \
+  --request-metric request_latency_s \
+  --request-target-s 10 \
+  --episode-metric wall_solve_time_s \
+  --episode-target-s 1800
+```
+
+To set different request SLOs for different agents, pass a JSON file such as:
+
+```json
+{
+  "Planner": 8.0,
+  "Inner-Navigator-Assistant": 12.0
+}
+```
+
+Then run:
+
+```bash
+ha-trace-slo-report /tmp/trace.reuse.replay.json \
+  --request-metric stage_latency_s \
+  --agent-request-targets /tmp/agent_targets.json \
+  --episode-metric service_span_s \
+  --episode-target-s 1500 \
+  --output /tmp/trace.slo_report.json
+```
+
+`request_latency_s` measures only executed vLLM request time. `stage_latency_s` adds synthetic tool sleep. `wall_solve_time_s` is the end-to-end replay time, while `service_span_s` is the time from first executed request arrival to last executed request departure.
+
+## Empirical SLOs
+
+You can derive empirical per-agent request SLOs directly from replay JSON files. This groups executed requests by agent and computes percentiles over `request_latency_s` or `stage_latency_s`.
+
+```bash
+ha-trace-derive-empirical-slos \
+  --glob "replays-two/*.replay.json" \
+  --request-metric request_latency_s \
+  --output /tmp/empirical_slos.json \
+  --interactive-targets-output /tmp/agent_targets_interactive.json \
+  --batch-targets-output /tmp/agent_targets_batch.json
+```
+
+The script recommends:
+
+- interactive targets = per-agent `p95`
+- batch targets = per-agent `p99`
+
+## Reuse Analysis
+
+You can analyze baseline versus reuse replay runs and write a full artifact bundle with pairwise comparisons, cache-hit breakdowns, and SVG plots:
+
+```bash
+ha-trace-analyze-reuse \
+  --baseline-glob "replays-two/*.baseline.replay.json" \
+  --reuse-glob "replays-two/*.reuse.replay.json" \
+  --output-dir reuse-analysis
+```
+
+This writes:
+
+- `reuse-analysis/reuse_analysis_report.json`
+- `reuse-analysis/pairwise_comparison.csv`
+- `reuse-analysis/throughput_by_instance.csv`
+- `reuse-analysis/throughput_by_agent.csv`
+- `reuse-analysis/throughput_by_tool_signature.csv`
+- `reuse-analysis/cache_hits_by_agent.csv`
+- `reuse-analysis/cache_hits_by_tool_signature.csv`
+- `reuse-analysis/cache_hits_by_agent_tool_signature.csv`
+- `reuse-analysis/savings_by_agent.csv`
+- `reuse-analysis/savings_by_tool_signature.csv`
+- `reuse-analysis/top_exact_repeats.csv`
+- `reuse-analysis/jct_comparison.svg`
+- `reuse-analysis/request_comparison.svg`
+- `reuse-analysis/throughput_wall_by_instance.svg`
+- `reuse-analysis/throughput_lm_by_instance.svg`
+- `reuse-analysis/throughput_by_agent.svg`
+- `reuse-analysis/throughput_by_tool_signature.svg`
+- `reuse-analysis/cache_hits_by_agent.svg`
+- `reuse-analysis/cache_hits_by_tool_signature.svg`
+- `reuse-analysis/saved_lm_time_by_agent.svg`
+- `reuse-analysis/saved_lm_time_by_tool_signature.svg`
+
+Use `--reuse-glob` by itself if you only want cache-hit analysis on reuse runs and do not need baseline-vs-reuse comparisons.
 
 ## SLO Derivation
 
@@ -254,6 +382,8 @@ python3 derive_slos_and_resource_groups.py \
 ```
 
 `--glob` controls which trajectory JSON files are read. `--single-file-output-dir` controls where the per-trajectory report files from batched runs are saved.
+
+In this repo, resource groups are used on top of vLLM. They help classify replay stages, report where repeated work appears, and summarize cache hits by stage type. They do not change vLLM's internal scheduler in this single-trajectory workflow.
 
 ## What gets measured
 

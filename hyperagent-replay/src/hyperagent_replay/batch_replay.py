@@ -6,6 +6,8 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from openai import OpenAI
 
@@ -14,6 +16,8 @@ from hyperagent_replay.replay import (
     DEFAULT_BASE_URL,
     DEFAULT_CONTEXT_SAFETY_MARGIN,
     DEFAULT_MIN_REFERENCE_CHARS,
+    ENGINE_MODE_CHOICES,
+    ENGINE_MODE_STOCK,
     kill_process_tree,
     launch_server,
     replay_trace,
@@ -127,6 +131,22 @@ def format_percent(numerator: int, denominator: int) -> str:
     return f"{(100.0 * numerator / denominator):.1f}%"
 
 
+def reset_server_prefix_cache(base_url: str, timeout_s: float = 10.0) -> bool:
+    """Best-effort POST to /reset_prefix_cache on the serving endpoint.
+
+    vLLM (stock and continuum) exposes this admin endpoint for benchmarking.
+    Returns True on 2xx, False otherwise. Used between traces to make the
+    Regime A (serial) comparison fair across baselines.
+    """
+    endpoint = base_url.rstrip("/").removesuffix("/v1") + "/reset_prefix_cache"
+    try:
+        request = Request(endpoint, method="POST", data=b"")
+        with urlopen(request, timeout=timeout_s) as resp:
+            return 200 <= resp.status < 300
+    except (OSError, URLError):
+        return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Batch-replay HyperAgent traces against a vLLM server")
@@ -228,6 +248,25 @@ def main() -> None:
         type=Path,
         default=DEFAULT_SKIP_LIST_PATH,
         help="Text file of extracted input basenames to skip",
+    )
+    parser.add_argument(
+        "--engine-mode",
+        choices=list(ENGINE_MODE_CHOICES),
+        default=ENGINE_MODE_STOCK,
+        help=(
+            "Serving backend to target. `continuum` adds vllm-continuum "
+            "scheduling metadata (job_id=instance_id, this_func_call, "
+            "is_last_step) on every request."
+        ),
+    )
+    parser.add_argument(
+        "--reset-prefix-cache-between-traces",
+        action="store_true",
+        help=(
+            "POST /reset_prefix_cache between each trace so per-trace "
+            "Regime A runs see a clean KV prefix cache. Recommended when "
+            "comparing engines/regimes."
+        ),
     )
     args = parser.parse_args()
 
@@ -342,6 +381,15 @@ def main() -> None:
                 )
                 continue
 
+            if args.reset_prefix_cache_between_traces:
+                reset_ok = reset_server_prefix_cache(args.base_url)
+                print(
+                    "[progress] "
+                    f"reset_prefix_cache before {input_path.name}: "
+                    f"{'ok' if reset_ok else 'skipped (endpoint unavailable)'}",
+                    flush=True,
+                )
+
             try:
                 replay = replay_trace(
                     trace=trace,
@@ -359,6 +407,7 @@ def main() -> None:
                     seed=args.seed,
                     delay_policy=args.delay_policy,
                     constant_delay=args.constant_delay,
+                    engine_mode=args.engine_mode,
                     progress_callback=lambda completed_turns, total_turns,
                     turn, *, file_position=file_position, total_inputs=total_inputs,
                     name=input_path.name: print(
@@ -413,6 +462,9 @@ def main() -> None:
         "phase": "replay",
         "model": args.model,
         "base_url": args.base_url,
+        "engine_mode": args.engine_mode,
+        "reset_prefix_cache_between_traces":
+        args.reset_prefix_cache_between_traces,
         "output_dir": str(args.output_dir.resolve()),
         "ordering": "lexicographic absolute path",
         "skip_list_path": str(args.skip_list.resolve()),

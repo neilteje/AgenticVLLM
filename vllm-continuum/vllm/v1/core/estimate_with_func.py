@@ -79,12 +79,25 @@ class ToolCallParser:
         Returns:
             The function call name (e.g., "ls", "cd", "git"), or None if not found
         """
-        # Same regex pattern as mini-swe-agent: r"```bash\s*\n(.*?)\n```"
-        actions = re.findall(r"```bash\s*\n(.*?)\n```", text, re.DOTALL)
+        # HyperAgent commonly emits Python-style tool calls such as
+        # `open_file._run(...)` inside fenced code blocks. Preserve the
+        # original mini-swe-agent bash behavior, but check these tool-call
+        # signatures first so Continuum can pin KV across live HyperAgent
+        # tool gaps.
+        actions = re.findall(r"```(?:python|bash)?\s*\n(.*?)\n```",
+                             text,
+                             re.DOTALL)
 
-        if len(actions) == 1:
-            bash_action = actions[0].strip()
-            # Extract the first word (command) from the action
+        for action in actions:
+            tool_match = re.search(r"\b([A-Za-z_]\w*)\._run\s*\(",
+                                   action)
+            if tool_match:
+                return tool_match.group(1)
+
+        bash_actions = re.findall(r"```bash\s*\n(.*?)\n```", text,
+                                  re.DOTALL)
+        if len(bash_actions) == 1:
+            bash_action = bash_actions[0].strip()
             words = bash_action.split()
             if words:
                 return words[0]
@@ -177,7 +190,13 @@ class ToolCallEstimator:
     def request_finished(self, request: Request) -> None:
         logger.info(f"Request job id finishing: {request.job_id}, time is {time.time()}")
 
-        # Detokenize output and parse function call
+        # If the client supplied `this_func_call` in the request (e.g. the
+        # hyperagent-replay driver sends the recorded tool signature as
+        # scheduling metadata), keep that value: the built-in parser below
+        # only recognizes ```bash fenced commands, which miss most
+        # multi-agent traces that use Python-style tool invocations.
+        client_provided_func_call = getattr(request, "this_func_call", None)
+
         this_func_call = None
         if self.tokenizer is not None and len(request.output_token_ids) > 0:
             try:
@@ -197,7 +216,10 @@ class ToolCallEstimator:
             except Exception as e:
                 logger.warning(f"Error detokenizing/parsing output for request {request.request_id}: {e}")
 
-        request.this_func_call = this_func_call
+        if client_provided_func_call is not None:
+            request.this_func_call = client_provided_func_call
+        else:
+            request.this_func_call = this_func_call
         self.job_to_history[request.job_id].append({
             "departure_time": time.time(),
             "func_call": request.this_func_call
