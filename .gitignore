@@ -36,7 +36,7 @@ dist/
 **/.git/
 
 # Experiment outputs
-results/
+#results/
 
 # Common large ML/data artifacts (weights, arrays, dumps, etc.)
 *.pt
