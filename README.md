@@ -45,18 +45,6 @@ python scripts/run_swe_bench.py \
   --output_folder outputs/continuum \
   --continuum_metrics_folder ../results/hyperagent_continuum_metrics
 ```
----
-## CLI flags (`run_swe_bench.py`)
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--backend` | `anthropic` | Set to `continuum` for local vLLM-Continuum |
-| `--continuum_base_url` | `http://127.0.0.1:8000/v1` | OpenAI-compatible API base |
-| `--continuum_model` | `Qwen/Qwen2.5-Coder-14B-Instruct` | Model name (must match `vllm serve`) |
-| `--continuum_metrics_folder` | `results/hyperagent_continuum_metrics` | Per-instance metrics JSON |
-| `--instance_ids` | (all in split) | Comma-separated SWE-bench ids |
-| `--split` | `verified` | SWE-bench split |
----
 
 ## Programmatic use (for custom scripts)
 
